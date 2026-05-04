@@ -1,6 +1,5 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from sklearn.linear_model import LogisticRegression
 import joblib
 import numpy as np
 import pandas as pd
@@ -10,10 +9,18 @@ import os
 app = Flask(__name__)
 CORS(app)
 
-model = joblib.load("model.pkl")
+# 🔥 Lazy loading (IMPORTANT FIX)
+model = None
+
+def load_model():
+    global model
+    if model is None:
+        print("Loading model...")
+        model = joblib.load("model.pkl")
+        fix_multi_class(model)
+    return model
 
 # Fix for sklearn 1.6+ compatibility
-
 def fix_multi_class(obj):
     if hasattr(obj, 'multi_class'):
         del obj.__dict__['multi_class']
@@ -27,9 +34,7 @@ def fix_multi_class(obj):
         for _, est in obj.estimators:
             fix_multi_class(est)
 
-fix_multi_class(model)
-
-# Load metadata for threshold - check multiple locations
+# Load metadata
 with open("model_metadata.json", "r") as f:
     metadata = json.load(f)
 
@@ -42,7 +47,10 @@ def home():
 @app.route("/predict", methods=["POST"])
 def predict():
     data = request.get_json()
-    
+
+    # Load model safely
+    model = load_model()
+
     # Extract features
     age = data.get("age")
     gender = data.get("gender")
@@ -54,9 +62,7 @@ def predict():
     physical_activity = data.get("physical_activity", 2)
     alcohol_intake = int(data.get("alcohol_intake", 0))
 
-    print(f"DEBUG: physical_activity type = {type(physical_activity)}, value = {physical_activity}")
-
-    # Compute derived features (must match preprocess.py exactly)
+    # Derived features
     age_group = 0 if age <= 30 else 1 if age <= 45 else 2 if age <= 60 else 3
     bmi_category = 0 if bmi <= 18.5 else 1 if bmi <= 25 else 2 if bmi <= 30 else 3
     bp_category = 0 if blood_pressure <= 90 else 1 if blood_pressure <= 120 else 2 if blood_pressure <= 140 else 3
@@ -66,10 +72,8 @@ def predict():
     bmi_glucose_interaction = bmi * glucose / 1000
     age_bp_interaction = age * blood_pressure / 1000
 
-    # Behavioral-physiological interaction features
     smoking_bp_risk = smoking_status * blood_pressure / 140
     smoking_glucose_risk = smoking_status * glucose / 100
-    # Higher activity should reduce risk: use inverse of activity (0=sedentary to 4=athlete)
     activity_bmi_risk = (4 - physical_activity) * bmi / 30
     activity_glucose_risk = (4 - physical_activity) * glucose / 100
     alcohol_liver_risk = alcohol_intake * glucose / 100
@@ -93,47 +97,28 @@ def predict():
     features_df = pd.DataFrame([features], columns=feature_names)
     prob = model.predict_proba(features_df)[0][1]
 
-    # Rule-based alcohol adjustment (multiplicative, not additive)
-    if alcohol_intake == 1:  # Moderate
-        if prob < 0.50:
-            prob = prob * 1.15  # Increase by 15%
-        else:
-            prob = prob * 1.10  # Increase by 10%
-    elif alcohol_intake == 2:  # High
-        if prob < 0.50:
-            prob = prob * 1.25  # Increase by 25%
-        else:
-            prob = prob * 1.20  # Increase by 20%
-    # alcohol_intake == 0 (Low) → no adjustment
+    # Adjustments
+    if alcohol_intake == 1:
+        prob *= 1.15 if prob < 0.5 else 1.10
+    elif alcohol_intake == 2:
+        prob *= 1.25 if prob < 0.5 else 1.20
 
-    # Rule-based smoking adjustment (multiplicative)
-    if smoking_status == 1:  # Former smoker
-        prob = prob * 1.10  # Increase by 10%
-    elif smoking_status == 2:  # Current smoker
-        prob = prob * 1.25  # Increase by 25%
-    # smoking_status == 0 (Never) → no adjustment
+    if smoking_status == 1:
+        prob *= 1.10
+    elif smoking_status == 2:
+        prob *= 1.25
 
-    # Rule-based physical activity adjustment (higher activity reduces risk)
-    print(f"DEBUG: probability before activity adjustment = {prob}")
-    if physical_activity == 0 or physical_activity == "0":  # Sedentary
-        prob = prob * 1.15  # Increase by 15%
-        print(f"DEBUG: Applied Sedentary adjustment, new prob = {prob}")
-    elif physical_activity == 1 or physical_activity == "1":  # Low
-        prob = prob * 1.05  # Increase by 5%
-        print(f"DEBUG: Applied Low adjustment, new prob = {prob}")
-    elif physical_activity == 3 or physical_activity == "3":  # Active
-        prob = prob * 0.92  # Decrease by 8%
-        print(f"DEBUG: Applied Active adjustment, new prob = {prob}")
-    elif physical_activity == 4 or physical_activity == "4":  # Very Active
-        prob = prob * 0.70  # Decrease by 30%
-        print(f"DEBUG: Applied Very Active adjustment, new prob = {prob}")
-    else:
-        print(f"DEBUG: No activity adjustment (Moderate), prob = {prob}")
-    # physical_activity == 2 (Moderate) → no adjustment
+    if physical_activity == 0 or physical_activity == "0":
+        prob *= 1.15
+    elif physical_activity == 1 or physical_activity == "1":
+        prob *= 1.05
+    elif physical_activity == 3 or physical_activity == "3":
+        prob *= 0.92
+    elif physical_activity == 4 or physical_activity == "4":
+        prob *= 0.70
 
-    prob = min(prob, 1.0)  # Cap at 100%
+    prob = min(prob, 1.0)
 
-    # Risk level and classification (aligned logic)
     if prob < 0.15:
         risk_level = "Low Risk"
         classification = "Healthy"
@@ -148,19 +133,14 @@ def predict():
         risk_color = "red"
 
     return (jsonify({
-    "probability": float(prob),
-    "risk_level": risk_level,
-    "classification": classification,
-    "risk_color": risk_color
-}), 200, {
-    "Access-Control-Allow-Origin": "*"
-})
+        "probability": float(prob),
+        "risk_level": risk_level,
+        "classification": classification,
+        "risk_color": risk_color
+    }), 200, {
+        "Access-Control-Allow-Origin": "*"
+    })
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
-
-
