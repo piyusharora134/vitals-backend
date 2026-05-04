@@ -1,0 +1,43 @@
+{
+  "model_type": "VotingClassifier (XGBoost + RF + GB + LR)",
+  "threshold": 0.43000000000000005,
+  "features": [
+    "age",
+    "gender",
+    "bmi",
+    "blood_pressure",
+    "cholesterol",
+    "glucose",
+    "smoking_status",
+    "physical_activity",
+    "alcohol_intake",
+    "age_group",
+    "bmi_category",
+    "bp_category",
+    "glucose_category",
+    "pulse_pressure",
+    "metabolic_risk",
+    "bmi_glucose_interaction",
+    "age_bp_interaction",
+    "smoking_bp_risk",
+    "smoking_glucose_risk",
+    "activity_bmi_risk",
+    "activity_glucose_risk",
+    "alcohol_liver_risk"
+  ],
+  "accuracy": 0.8347883189122374,
+  "roc_auc": 0.9159969542975058,
+  "f1": 0.8422178773010661,
+  "precision": 0.8262159814707586,
+  "recall": 0.8588518546384771,
+  "cv_roc_auc_mean": 0.9165092774267972,
+  "cv_roc_auc_std": 0.0008865852442983295,
+  "cv_accuracy_mean": 0.8374087301445737,
+  "datasets_used": [
+    "Heart Disease UCI",
+    "PIMA Diabetes",
+    "Stroke",
+    "NHANES",
+    "Cardiovascular"
+  ]
+}
